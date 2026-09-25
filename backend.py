@@ -717,20 +717,52 @@ graph.add_edge("guardrail_blocked", END)
 
 
 # =========================
-# PostgreSQL Checkpointer
+# PostgreSQL Checkpointer & Resilient Connection Manager
 # =========================
-DATABASE_URL = get_database_url()
+_conn = None
+_travel_graph = None
 
-_conn = psycopg.connect(
-    DATABASE_URL,
-    autocommit=True,
-    row_factory=dict_row
-)
 
-checkpointer = PostgresSaver(_conn)
-checkpointer.setup()
+def get_connection():
+    """Returns a healthy, open psycopg connection. Reconnects if closed or broken."""
+    global _conn
+    if _conn is not None and not getattr(_conn, "closed", True):
+        try:
+            # Perform a lightweight ping to verify connection is alive
+            _conn.execute("SELECT 1")
+            return _conn
+        except Exception:
+            try:
+                _conn.close()
+            except Exception:
+                pass
+            _conn = None
 
-travel_graph = graph.compile(checkpointer=checkpointer)
+    database_url = get_database_url()
+    _conn = psycopg.connect(
+        database_url,
+        autocommit=True,
+        row_factory=dict_row,
+    )
+    return _conn
+
+
+def get_travel_graph():
+    """Returns a compiled StateGraph checkpointer bound to an active database connection."""
+    global _travel_graph
+    try:
+        conn = get_connection()
+        checkpointer = PostgresSaver(conn)
+        checkpointer.setup()
+        _travel_graph = graph.compile(checkpointer=checkpointer)
+        return _travel_graph
+    except Exception as exc:
+        print("Error getting travel graph checkpointer:", exc)
+        raise exc
+
+
+# Compile initial graph checkpointer at startup
+travel_graph = get_travel_graph()
 
 
 
@@ -796,8 +828,9 @@ def run_travel_agent(user_input: str, thread_id: str | None = None):
         thread_id = f"user_{uuid.uuid4().hex}"
 
     config = {"configurable": {"thread_id": thread_id}}
+    active_graph = get_travel_graph()
 
-    result = travel_graph.invoke(
+    result = active_graph.invoke(
         {
             "messages": [HumanMessage(content=user_input)],
             "user_query": user_input,
@@ -833,7 +866,9 @@ def resume_travel_agent(
         raise ValueError("thread_id is required to resume a travel plan.")
 
     config = {"configurable": {"thread_id": thread_id}}
-    result = travel_graph.invoke(
+    active_graph = get_travel_graph()
+
+    result = active_graph.invoke(
         Command(
             resume={
                 "approved": approved,
