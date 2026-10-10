@@ -46,12 +46,12 @@ WEATHER_ENV["OPENWEATHER_API_KEY"] = (
 # LLM
 # ==========================================
 
-'''
-llm = ChatGroq(
-    model="openai/gpt-oss-safeguard-20b",
-    api_key=GROQ_API_KEY
-)
-'''
+
+#llm = ChatGroq(
+    #model="openai/gpt-oss-safeguard-20b",
+    #api_key=GROQ_API_KEY
+#)
+
 llm = ChatGroq(
     model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
     api_key=GROQ_API_KEY,
